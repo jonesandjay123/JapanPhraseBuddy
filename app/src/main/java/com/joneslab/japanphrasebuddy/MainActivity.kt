@@ -212,7 +212,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.Start,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
@@ -220,16 +220,6 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
-                        TextButton(
-                            onClick = {
-                                records = emptyList()
-                                savePhraseRecords(prefs, records)
-                                message = "已清空最近紀錄"
-                            }
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = null)
-                            Text("清空")
-                        }
                     }
                 }
 
@@ -536,7 +526,7 @@ private suspend fun generateJapanesePhrase(chineseText: String): Result<String> 
 
             val url = URL(
                 "https://generativelanguage.googleapis.com/v1beta/models/" +
-                    "gemini-3-flash-preview:generateContent?key=$apiKey"
+                    "gemini-2.5-flash-lite:generateContent?key=$apiKey"
             )
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"

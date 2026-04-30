@@ -22,7 +22,7 @@ GEMINI_API_KEY=你的_api_key
 目前模型使用：
 
 ```text
-gemini-3-flash-preview
+gemini-2.5-flash-lite
 ```
 
 ## 執行

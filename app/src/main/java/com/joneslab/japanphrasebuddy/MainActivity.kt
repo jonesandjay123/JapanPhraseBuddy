@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.icu.text.Transliterator
 import android.os.Bundle
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
@@ -18,33 +19,34 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -57,10 +59,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -125,10 +128,9 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("phrases", Context.MODE_PRIVATE) }
     var chineseText by remember { mutableStateOf("") }
-    var japaneseText by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
-    var isGenerating by remember { mutableStateOf(false) }
     var records by remember { mutableStateOf(loadPhraseRecords(prefs)) }
+    var translatingIds by remember { mutableStateOf(emptySet<Long>()) }
 
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -137,6 +139,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
             val spokenText = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
                 ?.firstOrNull()
+                ?.toTraditionalChinese()
                 .orEmpty()
             if (spokenText.isNotBlank()) {
                 chineseText = spokenText
@@ -175,9 +178,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
             item {
                 InputPanel(
                     chineseText = chineseText,
-                    japaneseText = japaneseText,
                     message = message,
-                    isGenerating = isGenerating,
                     onChineseChange = { chineseText = it },
                     onMicClick = {
                         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -185,42 +186,25 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
                             )
-                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-TW")
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-Hant-TW")
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "zh-Hant-TW")
                             putExtra(RecognizerIntent.EXTRA_PROMPT, "請用中文說出想轉成日文的內容")
                         }
                         speechLauncher.launch(intent)
                     },
-                    onGenerateClick = {
+                    onAddClick = {
                         val input = chineseText.trim()
                         if (input.isEmpty()) {
                             message = "先輸入或說一句中文"
                             return@InputPanel
                         }
-                        scope.launch {
-                            isGenerating = true
-                            message = "Gemini 正在整理成日文..."
-                            val result = generateJapanesePhrase(input)
-                            isGenerating = false
-                            result
-                                .onSuccess { japanese ->
-                                    japaneseText = japanese
-                                    val updatedRecords = (listOf(PhraseRecord(input, japanese)) + records)
-                                        .distinctBy { it.chinese.trim() to it.japanese.trim() }
-                                        .take(6)
-                                    records = updatedRecords
-                                    savePhraseRecords(prefs, updatedRecords)
-                                    message = "完成，可以播放或複製"
-                                }
-                                .onFailure { error ->
-                                    message = error.message ?: "產生日文失敗"
-                                }
-                        }
+                        val newRecord = PhraseRecord(input, "")
+                        val updatedRecords = listOf(newRecord) + records
+                        records = updatedRecords
+                        savePhraseRecords(prefs, updatedRecords)
+                        chineseText = ""
+                        message = "已新增小卡，之後可再翻譯"
                     },
-                    onSpeak = { onSpeak(japaneseText) },
-                    onCopy = {
-                        copyText(context, japaneseText)
-                        message = "已複製日文"
-                    }
                 )
             }
 
@@ -232,7 +216,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "最近使用",
+                            text = "小卡清單",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -249,18 +233,65 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                     }
                 }
 
-                items(records, key = { it.createdAt }) { record ->
+                itemsIndexed(records, key = { _, record -> record.createdAt }) { index, record ->
                     PhraseRecordCard(
                         record = record,
+                        index = index,
+                        lastIndex = records.lastIndex,
+                        isTranslating = record.createdAt in translatingIds,
                         onSelect = {
                             chineseText = record.chinese
-                            japaneseText = record.japanese
-                            message = "已載入這句"
+                            message = "已載入中文，可重新產生日文"
                         },
-                        onSpeak = { onSpeak(record.japanese) },
+                        onSpeak = {
+                            if (record.japanese.isBlank()) {
+                                message = "這張小卡還沒有日文"
+                            } else {
+                                onSpeak(record.japanese)
+                            }
+                        },
                         onCopy = {
-                            copyText(context, record.japanese)
-                            message = "已複製日文"
+                            if (record.japanese.isBlank()) {
+                                message = "這張小卡還沒有日文"
+                            } else {
+                                copyText(context, record.japanese)
+                                message = "已複製日文"
+                            }
+                        },
+                        onDelete = {
+                            val updatedRecords = records.filterNot { it.createdAt == record.createdAt }
+                            records = updatedRecords
+                            savePhraseRecords(prefs, updatedRecords)
+                            message = "已刪除小卡"
+                        },
+                        onMove = { fromIndex, toIndex ->
+                            val updatedRecords = records.move(fromIndex, toIndex)
+                            records = updatedRecords
+                            savePhraseRecords(prefs, updatedRecords)
+                        },
+                        onTranslate = {
+                            scope.launch {
+                                translatingIds = translatingIds + record.createdAt
+                                message = "Gemini 正在翻譯這張小卡..."
+                                val result = generateJapanesePhrase(record.chinese)
+                                translatingIds = translatingIds - record.createdAt
+                                result
+                                    .onSuccess { japanese ->
+                                        val updatedRecords = records.map {
+                                            if (it.createdAt == record.createdAt) {
+                                                it.copy(japanese = japanese)
+                                            } else {
+                                                it
+                                            }
+                                        }
+                                        records = updatedRecords
+                                        savePhraseRecords(prefs, updatedRecords)
+                                        message = "已補上日文"
+                                    }
+                                    .onFailure { error ->
+                                        message = error.message ?: "產生日文失敗"
+                                    }
+                            }
                         }
                     )
                 }
@@ -272,14 +303,10 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
 @Composable
 private fun InputPanel(
     chineseText: String,
-    japaneseText: String,
     message: String,
-    isGenerating: Boolean,
     onChineseChange: (String) -> Unit,
     onMicClick: () -> Unit,
-    onGenerateClick: () -> Unit,
-    onSpeak: () -> Unit,
-    onCopy: () -> Unit
+    onAddClick: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -296,7 +323,7 @@ private fun InputPanel(
                 value = chineseText,
                 onValueChange = onChineseChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("你想跟對方說什麼") },
+                label = { Text("新增小卡") },
                 placeholder = { Text("例如：請問這班車會到東京車站嗎？") },
                 minLines = 3,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
@@ -310,20 +337,11 @@ private fun InputPanel(
                     Icon(Icons.Default.Mic, contentDescription = "語音輸入")
                 }
                 Button(
-                    onClick = onGenerateClick,
-                    enabled = !isGenerating,
+                    onClick = onAddClick,
                     modifier = Modifier.weight(1f)
                 ) {
-                    if (isGenerating) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.height(18.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.padding(4.dp))
-                    } else {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
-                    }
-                    Text("產生日文")
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Text("新增小卡")
                 }
             }
 
@@ -334,37 +352,6 @@ private fun InputPanel(
                     color = MaterialTheme.colorScheme.secondary
                 )
             }
-
-            if (japaneseText.isNotBlank()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Text(
-                            text = japaneseText,
-                            fontSize = 26.sp,
-                            lineHeight = 34.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = onSpeak) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                Text("播放")
-                            }
-                            Button(onClick = onCopy) {
-                                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                                Text("複製")
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -372,42 +359,145 @@ private fun InputPanel(
 @Composable
 private fun PhraseRecordCard(
     record: PhraseRecord,
+    index: Int,
+    lastIndex: Int,
+    isTranslating: Boolean,
     onSelect: () -> Unit,
     onSpeak: () -> Unit,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onDelete: () -> Unit,
+    onMove: (fromIndex: Int, toIndex: Int) -> Unit,
+    onTranslate: () -> Unit
 ) {
+    val dragThreshold = with(LocalDensity.current) { 72.dp.toPx() }
+    var dragOffset by remember(record.createdAt) { mutableStateOf(0f) }
+    var dragIndex by remember(record.createdAt) { mutableStateOf(index) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         onClick = onSelect
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        Row(
+            modifier = Modifier.padding(end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = record.chinese,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = record.japanese,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = onSpeak) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Text("播放")
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .pointerInput(record.createdAt, index, lastIndex) {
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                dragOffset = 0f
+                                dragIndex = index
+                            },
+                            onVerticalDrag = { change, dragAmount ->
+                                change.consume()
+                                dragOffset += dragAmount
+
+                                if (dragOffset > dragThreshold && dragIndex < lastIndex) {
+                                    onMove(dragIndex, dragIndex + 1)
+                                    dragIndex += 1
+                                    dragOffset = 0f
+                                } else if (dragOffset < -dragThreshold && dragIndex > 0) {
+                                    onMove(dragIndex, dragIndex - 1)
+                                    dragIndex -= 1
+                                    dragOffset = 0f
+                                }
+                            },
+                            onDragEnd = {
+                                dragOffset = 0f
+                            },
+                            onDragCancel = {
+                                dragOffset = 0f
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DragHandle,
+                    contentDescription = "拖曳排序",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = record.chinese,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = record.japanese.ifBlank { "尚未翻譯" },
+                    fontSize = 22.sp,
+                    lineHeight = 30.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (record.japanese.isBlank()) {
+                        MaterialTheme.colorScheme.outline
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
+                )
+                if (isTranslating) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            text = "Gemini 正在整理成自然日文...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
                 }
-                TextButton(onClick = onCopy) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null)
-                    Text("複製")
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    TextButton(
+                        onClick = onTranslate,
+                        enabled = !isTranslating
+                    ) {
+                        Icon(Icons.Default.Translate, contentDescription = null)
+                        Text(if (record.japanese.isBlank()) "翻譯" else "重翻")
+                    }
+                    TextButton(
+                        onClick = onSpeak,
+                        enabled = record.japanese.isNotBlank() && !isTranslating
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Text("播放")
+                    }
+                    TextButton(
+                        onClick = onCopy,
+                        enabled = record.japanese.isNotBlank() && !isTranslating
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                        Text("複製")
+                    }
+                    TextButton(
+                        onClick = onDelete,
+                        enabled = !isTranslating
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null)
+                        Text("刪除")
+                    }
                 }
             }
         }
     }
 }
+
+private fun List<PhraseRecord>.move(fromIndex: Int, toIndex: Int): List<PhraseRecord> {
+    if (fromIndex !in indices || toIndex !in indices || fromIndex == toIndex) return this
+    return toMutableList().apply {
+        add(toIndex, removeAt(fromIndex))
+    }
+}
+
+private fun String.toTraditionalChinese(): String =
+    Transliterator.getInstance("Simplified-Traditional").transliterate(this)
 
 private suspend fun generateJapanesePhrase(chineseText: String): Result<String> =
     withContext(Dispatchers.IO) {
@@ -531,14 +621,10 @@ fun JapanPhraseBuddyPreview() {
         Box(Modifier.fillMaxSize()) {
             InputPanel(
                 chineseText = "請問這班車會到東京車站嗎？",
-                japaneseText = "すみません、この電車は東京駅まで行きますか？",
-                message = "完成，可以播放或複製",
-                isGenerating = false,
+                message = "會先新增成小卡，之後再翻譯",
                 onChineseChange = {},
                 onMicClick = {},
-                onGenerateClick = {},
-                onSpeak = {},
-                onCopy = {}
+                onAddClick = {}
             )
         }
     }

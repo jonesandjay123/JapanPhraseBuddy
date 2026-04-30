@@ -18,6 +18,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -54,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -91,6 +94,7 @@ private const val PHRASE_CARDS_PATH = "/phrase_cards"
 private const val REQUEST_PHRASE_CARDS_PATH = "/request_phrase_cards"
 private const val PHRASE_CARDS_JSON_KEY = "cards_json"
 private const val PHRASE_CARDS_UPDATED_AT_KEY = "updated_at"
+private const val SHOW_FURIGANA_KEY = "show_furigana"
 
 class MainActivity : ComponentActivity() {
     private var tts: TextToSpeech? = null
@@ -132,7 +136,20 @@ class MainActivity : ComponentActivity() {
 data class PhraseRecord(
     val chinese: String,
     val japanese: String,
+    val furiganaReading: String = "",
+    val rubySegments: List<RubySegment> = emptyList(),
     val createdAt: Long = System.currentTimeMillis()
+)
+
+data class RubySegment(
+    val text: String,
+    val reading: String = ""
+)
+
+private data class JapaneseTranslation(
+    val japanese: String,
+    val furiganaReading: String,
+    val rubySegments: List<RubySegment>
 )
 
 class PhonePhraseSyncService : WearableListenerService() {
@@ -155,6 +172,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
     var records by remember { mutableStateOf(loadPhraseRecords(prefs)) }
     var translatingIds by remember { mutableStateOf(emptySet<Long>()) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var showFurigana by remember { mutableStateOf(prefs.getBoolean(SHOW_FURIGANA_KEY, true)) }
 
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -181,6 +199,25 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                         Text(
                             text = "中文現場轉自然日文",
                             style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                },
+                actions = {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(end = 10.dp)
+                    ) {
+                        Text(
+                            text = "假名",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Switch(
+                            checked = showFurigana,
+                            onCheckedChange = { enabled ->
+                                showFurigana = enabled
+                                prefs.edit().putBoolean(SHOW_FURIGANA_KEY, enabled).apply()
+                            }
                         )
                     }
                 },
@@ -255,11 +292,11 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                                     message = "已複製匯出 prompt"
                                 }
                             ) {
-                                Icon(Icons.Default.FileDownload, contentDescription = null)
+                                Icon(Icons.Default.FileUpload, contentDescription = null)
                                 Text("匯出")
                             }
                             TextButton(onClick = { showImportDialog = true }) {
-                                Icon(Icons.Default.FileUpload, contentDescription = null)
+                                Icon(Icons.Default.FileDownload, contentDescription = null)
                                 Text("匯入")
                             }
                         }
@@ -272,6 +309,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                         index = index,
                         lastIndex = records.lastIndex,
                         isTranslating = record.createdAt in translatingIds,
+                        showFurigana = showFurigana,
                         onSelect = {
                             chineseText = record.chinese
                             message = "已載入中文，可重新產生日文"
@@ -309,10 +347,14 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                                 val result = generateJapanesePhrase(record.chinese)
                                 translatingIds = translatingIds - record.createdAt
                                 result
-                                    .onSuccess { japanese ->
+                                    .onSuccess { translation ->
                                         val updatedRecords = records.map {
                                             if (it.createdAt == record.createdAt) {
-                                                it.copy(japanese = japanese)
+                                                it.copy(
+                                                    japanese = translation.japanese,
+                                                    furiganaReading = translation.furiganaReading,
+                                                    rubySegments = translation.rubySegments
+                                                )
                                             } else {
                                                 it
                                             }
@@ -413,6 +455,7 @@ private fun PhraseRecordCard(
     index: Int,
     lastIndex: Int,
     isTranslating: Boolean,
+    showFurigana: Boolean,
     onSelect: () -> Unit,
     onSpeak: () -> Unit,
     onCopy: () -> Unit,
@@ -484,16 +527,9 @@ private fun PhraseRecordCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text(
-                    text = record.japanese.ifBlank { "尚未翻譯" },
-                    fontSize = 22.sp,
-                    lineHeight = 30.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (record.japanese.isBlank()) {
-                        MaterialTheme.colorScheme.outline
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    }
+                JapaneseRubyText(
+                    record = record,
+                    showFurigana = showFurigana
                 )
                 if (isTranslating) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -537,6 +573,71 @@ private fun PhraseRecordCard(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun JapaneseRubyText(
+    record: PhraseRecord,
+    showFurigana: Boolean
+) {
+    when {
+        record.japanese.isBlank() -> {
+            Text(
+                text = "尚未翻譯",
+                fontSize = 22.sp,
+                lineHeight = 30.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+
+        record.rubySegments.isEmpty() || !showFurigana -> {
+            Text(
+                text = record.japanese,
+                fontSize = 22.sp,
+                lineHeight = 30.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        else -> {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                record.rubySegments
+                    .filter { it.text.isNotBlank() }
+                    .forEach { segment ->
+                        RubySegmentText(segment = segment)
+                    }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RubySegmentText(segment: RubySegment) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+        modifier = Modifier.padding(end = 1.dp)
+    ) {
+        Text(
+            text = segment.reading,
+            fontSize = 10.sp,
+            lineHeight = 12.sp,
+            color = MaterialTheme.colorScheme.secondary,
+            maxLines = 1
+        )
+        Text(
+            text = segment.text,
+            fontSize = 22.sp,
+            lineHeight = 28.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -604,7 +705,11 @@ private fun buildLlmExportPrompt(records: List<PhraseRecord>): String {
         你是台灣旅人在日本旅行時的現場口譯助手。
         請把下方 JSON 中每個 chinese 翻成自然、禮貌、適合直接對日本店員、站務、飯店櫃檯或路人說的日文。
         可以稍微潤飾成更自然的日文，但不要新增中文沒有提到的事實。
-        請保留 id、chinese 和順序，只填寫或更新 japanese。
+        請保留 id、chinese 和順序，只填寫或更新 japanese、furiganaReading、rubySegments。
+        furiganaReading 是 japanese 的整句平假名讀音。
+        rubySegments 是陣列，每個元素格式為 {"text":"日本語原文片段","reading":"平假名讀音"}。
+        只有漢字或需要註音的片段才填 reading；純假名、標點、外來語可用空字串。
+        rubySegments 串起來的 text 必須完全等於 japanese。
         只回傳合法 JSON 陣列，不要 Markdown，不要解釋，不要包在 ``` 裡。
 
         JSON:
@@ -617,29 +722,40 @@ private fun importTranslatedRecords(
     currentRecords: List<PhraseRecord>
 ): Result<ImportResult> = runCatching {
     val importedArray = JSONArray(extractJsonArrayText(jsonText))
-    val importedJapaneseById = mutableMapOf<Long, String>()
+    val importedTranslationsById = mutableMapOf<Long, JapaneseTranslation>()
 
     for (index in 0 until importedArray.length()) {
         val item = importedArray.getJSONObject(index)
         val id = item.optLong("id", Long.MIN_VALUE)
         val japanese = item.optString("japanese").trim()
         if (id != Long.MIN_VALUE && japanese.isNotBlank()) {
-            importedJapaneseById[id] = japanese.trim('"')
+            importedTranslationsById[id] = JapaneseTranslation(
+                japanese = japanese.trim('"'),
+                furiganaReading = item.optString("furiganaReading").trim(),
+                rubySegments = normalizeRubySegments(
+                    japanese = japanese.trim('"'),
+                    segments = parseRubySegments(item.optJSONArray("rubySegments"))
+                )
+            )
         }
     }
 
-    require(importedJapaneseById.isNotEmpty()) {
+    require(importedTranslationsById.isNotEmpty()) {
         "找不到可匯入的 japanese 結果"
     }
 
     var updatedCount = 0
     val updatedRecords = currentRecords.map { record ->
-        val importedJapanese = importedJapaneseById[record.createdAt]
-        if (importedJapanese.isNullOrBlank()) {
+        val importedTranslation = importedTranslationsById[record.createdAt]
+        if (importedTranslation == null) {
             record
         } else {
             updatedCount += 1
-            record.copy(japanese = importedJapanese)
+            record.copy(
+                japanese = importedTranslation.japanese,
+                furiganaReading = importedTranslation.furiganaReading,
+                rubySegments = importedTranslation.rubySegments
+            )
         }
     }
 
@@ -664,16 +780,89 @@ private fun extractJsonArrayText(rawText: String): String {
     return trimmed.substring(start, end + 1)
 }
 
+private fun extractJsonObjectText(rawText: String): String {
+    val trimmed = rawText.trim()
+        .removePrefix("```json")
+        .removePrefix("```")
+        .removeSuffix("```")
+        .trim()
+    val start = trimmed.indexOf('{')
+    val end = trimmed.lastIndexOf('}')
+    require(start >= 0 && end > start) {
+        "Gemini 沒有回傳 JSON object"
+    }
+    return trimmed.substring(start, end + 1)
+}
+
+private fun parseJapaneseTranslation(rawText: String): JapaneseTranslation {
+    val item = JSONObject(extractJsonObjectText(rawText))
+    val japanese = item.optString("japanese").trim()
+    require(japanese.isNotBlank()) {
+        "Gemini 沒有回傳 japanese"
+    }
+    val rubySegments = parseRubySegments(item.optJSONArray("rubySegments"))
+    return JapaneseTranslation(
+        japanese = japanese,
+        furiganaReading = item.optString("furiganaReading").trim(),
+        rubySegments = normalizeRubySegments(japanese, rubySegments)
+    )
+}
+
 private fun PhraseRecord.toJsonObject(): JSONObject =
     JSONObject()
         .put("id", createdAt)
         .put("chinese", chinese)
         .put("japanese", japanese)
+        .put("furiganaReading", furiganaReading)
+        .put("rubySegments", rubySegments.toRubySegmentsJsonArray())
+
+private fun parseRubySegments(array: JSONArray?): List<RubySegment> {
+    if (array == null) return emptyList()
+    return buildList {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val text = item.optString("text")
+            if (text.isNotBlank()) {
+                add(
+                    RubySegment(
+                        text = text,
+                        reading = item.optString("reading").trim()
+                    )
+                )
+            }
+        }
+    }
+}
+
+private fun List<RubySegment>.toRubySegmentsJsonArray(): JSONArray {
+    val array = JSONArray()
+    forEach { segment ->
+        array.put(
+            JSONObject()
+                .put("text", segment.text)
+                .put("reading", segment.reading)
+        )
+    }
+    return array
+}
+
+private fun normalizeRubySegments(
+    japanese: String,
+    segments: List<RubySegment>
+): List<RubySegment> {
+    if (segments.isEmpty()) return listOf(RubySegment(text = japanese))
+    val joinedText = segments.joinToString(separator = "") { it.text }
+    return if (joinedText == japanese) {
+        segments
+    } else {
+        listOf(RubySegment(text = japanese))
+    }
+}
 
 private fun String.toTraditionalChinese(): String =
     Transliterator.getInstance("Simplified-Traditional").transliterate(this)
 
-private suspend fun generateJapanesePhrase(chineseText: String): Result<String> =
+private suspend fun generateJapanesePhrase(chineseText: String): Result<JapaneseTranslation> =
     withContext(Dispatchers.IO) {
         runCatching {
             val apiKey = BuildConfig.GEMINI_API_KEY
@@ -685,7 +874,23 @@ private suspend fun generateJapanesePhrase(chineseText: String): Result<String> 
                 你是台灣旅人在日本旅行時的現場口譯助手。
                 請把下面這句中文轉成自然、禮貌、適合直接對日本店員、站務、飯店櫃檯或路人說的日文。
                 可以稍微潤飾成更自然的日文，但不要新增中文沒有提到的事實。
-                只輸出日文句子本身，不要解釋，不要 Markdown，不要加引號。
+                同時提供日文漢字的假名讀音資料。
+
+                請只輸出合法 JSON object，不要 Markdown，不要解釋，不要包在 ``` 裡。
+                JSON schema:
+                {
+                  "japanese": "自然禮貌的日文句子",
+                  "furiganaReading": "整句 japanese 的平假名讀音",
+                  "rubySegments": [
+                    { "text": "日文原文片段", "reading": "這個片段的平假名讀音；不需要註音則留空" }
+                  ]
+                }
+
+                規則：
+                - rubySegments 串起來的 text 必須完全等於 japanese。
+                - 漢字或含漢字的詞請提供 reading。
+                - 純假名、標點、外來語可以 reading 空字串。
+                - reading 請用平假名，不要羅馬字。
 
                 中文：$chineseText
             """.trimIndent()
@@ -737,7 +942,7 @@ private suspend fun generateJapanesePhrase(chineseText: String): Result<String> 
                 error("Gemini API 失敗：HTTP $responseCode")
             }
 
-            JSONObject(responseText)
+            val generatedText = JSONObject(responseText)
                 .getJSONArray("candidates")
                 .getJSONObject(0)
                 .getJSONObject("content")
@@ -747,6 +952,8 @@ private suspend fun generateJapanesePhrase(chineseText: String): Result<String> 
                 .trim()
                 .trim('"')
                 .ifBlank { error("Gemini 沒有回傳日文") }
+
+            parseJapaneseTranslation(generatedText)
         }
     }
 
@@ -769,7 +976,9 @@ private fun loadPhraseRecords(prefs: android.content.SharedPreferences): List<Ph
             val item = array.getJSONObject(index)
             PhraseRecord(
                 chinese = item.getString("chinese"),
-                japanese = item.getString("japanese"),
+                japanese = item.optString("japanese"),
+                furiganaReading = item.optString("furiganaReading"),
+                rubySegments = parseRubySegments(item.optJSONArray("rubySegments")),
                 createdAt = item.optLong("createdAt", System.currentTimeMillis())
             )
         }
@@ -789,25 +998,27 @@ private fun savePhraseRecords(
     prefs: android.content.SharedPreferences,
     records: List<PhraseRecord>
 ) {
-    prefs.edit().putString(RECENT_PHRASES_KEY, records.toJsonArray().toString()).apply()
+    prefs.edit().putString(RECENT_PHRASES_KEY, records.toPhraseRecordsJsonArray().toString()).apply()
 }
 
 private fun syncPhraseRecordsToWear(context: Context, records: List<PhraseRecord>) {
     val request = PutDataMapRequest.create(PHRASE_CARDS_PATH).apply {
-        dataMap.putString(PHRASE_CARDS_JSON_KEY, records.toJsonArray().toString())
+        dataMap.putString(PHRASE_CARDS_JSON_KEY, records.toPhraseRecordsJsonArray().toString())
         dataMap.putLong(PHRASE_CARDS_UPDATED_AT_KEY, System.currentTimeMillis())
     }.asPutDataRequest().setUrgent()
 
     Wearable.getDataClient(context.applicationContext).putDataItem(request)
 }
 
-private fun List<PhraseRecord>.toJsonArray(): JSONArray {
+private fun List<PhraseRecord>.toPhraseRecordsJsonArray(): JSONArray {
     val array = JSONArray()
     forEach { record ->
         array.put(
             JSONObject()
                 .put("chinese", record.chinese)
                 .put("japanese", record.japanese)
+                .put("furiganaReading", record.furiganaReading)
+                .put("rubySegments", record.rubySegments.toRubySegmentsJsonArray())
                 .put("createdAt", record.createdAt)
         )
     }

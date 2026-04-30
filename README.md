@@ -10,6 +10,8 @@
 - Android 原生中文語音輸入，回填前會轉成繁體中文
 - 一句中文先存成一張小卡，不需要等 Gemini 成功
 - 每張小卡可個別翻譯、重翻、播放、複製、刪除
+- 手機版會在日文漢字上方顯示平假名讀音，輔助認字與發音
+- 手機右上角可切換假名顯示開關，並會記住上次狀態
 - Android 原生日文 Text-to-Speech 播放
 - 小卡可用左側拖曳把手調整順序
 - 小卡會存在本機，下次打開仍保留
@@ -21,9 +23,11 @@
 1. 在上方輸入中文，或按麥克風用中文語音輸入。
 2. 按「新增小卡」，先把腦中想到的句子存下來。
 3. 對需要的卡片按「翻譯」，用 Gemini 產生日文。
-4. 翻譯完成後可按「播放」或「複製」。
-5. 若日文不滿意，可按「重翻」。
-6. 用左側拖曳把手排列小卡順序。
+4. 翻譯完成後，手機卡片會用 furigana/ruby 形式把假名顯示在漢字上方。
+5. 可按「播放」或「複製」。
+6. 若日文不滿意，可按「重翻」。
+7. 可用右上角「假名」開關顯示或隱藏假名音標。
+8. 用左側拖曳把手排列小卡順序。
 
 小卡按鈕順序刻意排成：
 
@@ -55,7 +59,7 @@ gemini-2.5-flash-lite
 2. App 會把翻譯 prompt 和小卡 JSON 複製到剪貼簿。
 3. 貼到 ChatGPT、Gemini 網頁版、Claude 等外部 LLM。
 4. 將 LLM 回傳的 JSON 複製回 App 的「匯入」對話框。
-5. App 會用 `id` 對應既有小卡，補上 `japanese` 欄位。
+5. App 會用 `id` 對應既有小卡，補上 `japanese`、`furiganaReading` 和 `rubySegments` 欄位。
 
 匯入格式核心如下：
 
@@ -64,7 +68,17 @@ gemini-2.5-flash-lite
   {
     "id": 123456789,
     "chinese": "請問這班車會到東京車站嗎？",
-    "japanese": "すみません、この電車は東京駅まで行きますか？"
+    "japanese": "すみません、この電車は東京駅まで行きますか？",
+    "furiganaReading": "すみません、このでんしゃはとうきょうえきまでいきますか？",
+    "rubySegments": [
+      { "text": "すみません、この", "reading": "" },
+      { "text": "電車", "reading": "でんしゃ" },
+      { "text": "は", "reading": "" },
+      { "text": "東京駅", "reading": "とうきょうえき" },
+      { "text": "まで", "reading": "" },
+      { "text": "行", "reading": "い" },
+      { "text": "きますか？", "reading": "" }
+    ]
   }
 ]
 ```
@@ -97,6 +111,8 @@ wear/  手錶版
 - 顯示中文與日文
 - 播放日文 TTS
 - 手動按「同步」向手機要求最新資料
+
+手錶版目前刻意不顯示 furigana，維持簡潔顯示與播放。
 
 同步方式使用 Wear OS Data Layer：
 
@@ -154,6 +170,7 @@ adb -s 手錶_serial install -r wear/build/outputs/apk/debug/wear-debug.apk
 - SharedPreferences + JSON 儲存小卡
 - Gemini REST API
 - Wear OS Data Layer
+- 手機端自製 Compose ruby/furigana 顯示
 
 ## 目前刻意不做的事
 
@@ -161,4 +178,4 @@ adb -s 手錶_serial install -r wear/build/outputs/apk/debug/wear-debug.apk
 - 不做預載片語
 - 不做英文、泰文、多語言
 - 不做登入、Firebase、上架流程
-- 手錶版不做 Gemini、不做輸入、不做編輯，只做同步顯示與播放
+- 手錶版不做 Gemini、不做輸入、不做編輯、不顯示 furigana，只做同步顯示與播放

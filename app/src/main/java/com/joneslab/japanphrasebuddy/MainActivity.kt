@@ -34,9 +34,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -131,6 +134,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
     var message by remember { mutableStateOf("") }
     var records by remember { mutableStateOf(loadPhraseRecords(prefs)) }
     var translatingIds by remember { mutableStateOf(emptySet<Long>()) }
+    var showImportDialog by remember { mutableStateOf(false) }
 
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -212,7 +216,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
@@ -220,6 +224,25 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(
+                                onClick = {
+                                    copyText(
+                                        context = context,
+                                        text = buildLlmExportPrompt(records),
+                                        label = "Japan Phrase Buddy export"
+                                    )
+                                    message = "已複製匯出 prompt"
+                                }
+                            ) {
+                                Icon(Icons.Default.FileDownload, contentDescription = null)
+                                Text("匯出")
+                            }
+                            TextButton(onClick = { showImportDialog = true }) {
+                                Icon(Icons.Default.FileUpload, contentDescription = null)
+                                Text("匯入")
+                            }
+                        }
                     }
                 }
 
@@ -287,6 +310,24 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                 }
             }
         }
+    }
+
+    if (showImportDialog) {
+        ImportJsonDialog(
+            onDismiss = { showImportDialog = false },
+            onImport = { jsonText ->
+                importTranslatedRecords(jsonText, records)
+                    .onSuccess { result ->
+                        records = result.records
+                        savePhraseRecords(prefs, result.records)
+                        showImportDialog = false
+                        message = "已更新 ${result.updatedCount} 張小卡"
+                    }
+                    .onFailure { error ->
+                        message = error.message ?: "匯入失敗"
+                    }
+            }
+        )
     }
 }
 
@@ -446,13 +487,6 @@ private fun PhraseRecordCard(
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     TextButton(
-                        onClick = onTranslate,
-                        enabled = !isTranslating
-                    ) {
-                        Icon(Icons.Default.Translate, contentDescription = null)
-                        Text(if (record.japanese.isBlank()) "翻譯" else "重翻")
-                    }
-                    TextButton(
                         onClick = onSpeak,
                         enabled = record.japanese.isNotBlank() && !isTranslating
                     ) {
@@ -467,6 +501,13 @@ private fun PhraseRecordCard(
                         Text("複製")
                     }
                     TextButton(
+                        onClick = onTranslate,
+                        enabled = !isTranslating
+                    ) {
+                        Icon(Icons.Default.Translate, contentDescription = null)
+                        Text(if (record.japanese.isBlank()) "翻譯" else "重翻")
+                    }
+                    TextButton(
                         onClick = onDelete,
                         enabled = !isTranslating
                     ) {
@@ -479,12 +520,135 @@ private fun PhraseRecordCard(
     }
 }
 
+@Composable
+private fun ImportJsonDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Unit
+) {
+    var jsonText by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("匯入 LLM 翻譯結果") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "貼上 LLM 回傳的 JSON。App 會用 id 對應小卡，只補上 japanese 欄位。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedTextField(
+                    value = jsonText,
+                    onValueChange = { jsonText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("JSON") },
+                    minLines = 8,
+                    maxLines = 12
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onImport(jsonText) },
+                enabled = jsonText.isNotBlank()
+            ) {
+                Text("匯入")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
 private fun List<PhraseRecord>.move(fromIndex: Int, toIndex: Int): List<PhraseRecord> {
     if (fromIndex !in indices || toIndex !in indices || fromIndex == toIndex) return this
     return toMutableList().apply {
         add(toIndex, removeAt(fromIndex))
     }
 }
+
+private data class ImportResult(
+    val records: List<PhraseRecord>,
+    val updatedCount: Int
+)
+
+private fun buildLlmExportPrompt(records: List<PhraseRecord>): String {
+    val exportArray = JSONArray()
+    records.forEach { record ->
+        exportArray.put(record.toJsonObject())
+    }
+
+    return """
+        你是台灣旅人在日本旅行時的現場口譯助手。
+        請把下方 JSON 中每個 chinese 翻成自然、禮貌、適合直接對日本店員、站務、飯店櫃檯或路人說的日文。
+        可以稍微潤飾成更自然的日文，但不要新增中文沒有提到的事實。
+        請保留 id、chinese 和順序，只填寫或更新 japanese。
+        只回傳合法 JSON 陣列，不要 Markdown，不要解釋，不要包在 ``` 裡。
+
+        JSON:
+        ${exportArray.toString(2)}
+    """.trimIndent()
+}
+
+private fun importTranslatedRecords(
+    jsonText: String,
+    currentRecords: List<PhraseRecord>
+): Result<ImportResult> = runCatching {
+    val importedArray = JSONArray(extractJsonArrayText(jsonText))
+    val importedJapaneseById = mutableMapOf<Long, String>()
+
+    for (index in 0 until importedArray.length()) {
+        val item = importedArray.getJSONObject(index)
+        val id = item.optLong("id", Long.MIN_VALUE)
+        val japanese = item.optString("japanese").trim()
+        if (id != Long.MIN_VALUE && japanese.isNotBlank()) {
+            importedJapaneseById[id] = japanese.trim('"')
+        }
+    }
+
+    require(importedJapaneseById.isNotEmpty()) {
+        "找不到可匯入的 japanese 結果"
+    }
+
+    var updatedCount = 0
+    val updatedRecords = currentRecords.map { record ->
+        val importedJapanese = importedJapaneseById[record.createdAt]
+        if (importedJapanese.isNullOrBlank()) {
+            record
+        } else {
+            updatedCount += 1
+            record.copy(japanese = importedJapanese)
+        }
+    }
+
+    require(updatedCount > 0) {
+        "JSON 裡的 id 沒有對應到目前小卡"
+    }
+
+    ImportResult(updatedRecords, updatedCount)
+}
+
+private fun extractJsonArrayText(rawText: String): String {
+    val trimmed = rawText.trim()
+        .removePrefix("```json")
+        .removePrefix("```")
+        .removeSuffix("```")
+        .trim()
+    val start = trimmed.indexOf('[')
+    val end = trimmed.lastIndexOf(']')
+    require(start >= 0 && end > start) {
+        "請貼上 JSON 陣列"
+    }
+    return trimmed.substring(start, end + 1)
+}
+
+private fun PhraseRecord.toJsonObject(): JSONObject =
+    JSONObject()
+        .put("id", createdAt)
+        .put("chinese", chinese)
+        .put("japanese", japanese)
 
 private fun String.toTraditionalChinese(): String =
     Transliterator.getInstance("Simplified-Traditional").transliterate(this)
@@ -566,10 +730,14 @@ private suspend fun generateJapanesePhrase(chineseText: String): Result<String> 
         }
     }
 
-private fun copyText(context: Context, text: String) {
+private fun copyText(
+    context: Context,
+    text: String,
+    label: String = "Japanese phrase"
+) {
     if (text.isBlank()) return
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText("Japanese phrase", text))
+    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
     Toast.makeText(context, "已複製", Toast.LENGTH_SHORT).show()
 }
 

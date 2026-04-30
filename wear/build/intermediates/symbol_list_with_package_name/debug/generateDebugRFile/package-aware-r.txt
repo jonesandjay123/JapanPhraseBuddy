@@ -1,4 +1,0 @@
-com.joneslab.japanphrasebuddy.wear
-drawable ic_launcher
-string app_name
-style Theme_JapanPhraseBuddyWear

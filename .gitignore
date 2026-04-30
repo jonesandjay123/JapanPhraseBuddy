@@ -18,3 +18,6 @@ local.properties
 .env.*
 *.keystore
 *.jks
+
+# Module build outputs
+wear/build/

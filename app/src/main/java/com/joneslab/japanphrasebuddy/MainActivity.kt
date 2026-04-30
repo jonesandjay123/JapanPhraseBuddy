@@ -609,7 +609,7 @@ private fun JapaneseRubyText(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 record.rubySegments
-                    .filter { it.text.isNotBlank() }
+                    .flatMap { it.toDisplaySegments() }
                     .forEach { segment ->
                         RubySegmentText(segment = segment)
                     }
@@ -639,6 +639,20 @@ private fun RubySegmentText(segment: RubySegment) {
             fontWeight = FontWeight.SemiBold
         )
     }
+}
+
+private fun RubySegment.toDisplaySegments(): List<RubySegment> {
+    if (text.isBlank()) return emptyList()
+    if (reading.isNotBlank()) return listOf(this)
+
+    return text.codePoints()
+        .toArray()
+        .map { codePoint ->
+            RubySegment(
+                text = String(Character.toChars(codePoint)),
+                reading = ""
+            )
+        }
 }
 
 @Composable

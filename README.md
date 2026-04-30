@@ -83,6 +83,20 @@ gemini-2.5-flash-lite
 ]
 ```
 
+## 資料相容性
+
+目前小卡 JSON 主要欄位包含：
+
+- `chinese`
+- `japanese`
+- `furiganaReading`
+- `rubySegments`
+- `createdAt`
+
+舊版小卡只有 `chinese`、`japanese`、`createdAt` 也可以繼續使用、播放和同步；只是沒有 `rubySegments` 的舊卡不會顯示漢字上方假名。若想補上假名音標，對舊卡按「重翻」，或使用匯出/匯入讓外部 LLM 補回 `furiganaReading` 與 `rubySegments`。
+
+手機端會檢查 `rubySegments` 串起來是否完全等於 `japanese`。如果不一致，會自動退回普通日文顯示，避免假名錯位。
+
 ## 執行
 
 ```bash

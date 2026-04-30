@@ -17,6 +17,7 @@
 - 小卡會存在本機，下次打開仍保留
 - Gemini API 429 或額度用完時，可匯出 prompt 給外部 LLM 翻譯，再匯入 JSON 補回小卡
 - Wear OS 版本可被動同步手機小卡，顯示同一份清單並播放日文 TTS
+- 手錶版也有獨立「假名」開關，預設關閉，開啟後會嘗試顯示漢字上方假名
 
 ## 使用方式
 
@@ -28,6 +29,7 @@
 6. 若日文不滿意，可按「重翻」。
 7. 可用右上角「假名」開關顯示或隱藏假名音標。
 8. 用左側拖曳把手排列小卡順序。
+9. 手錶端若需要看讀音，可在手錶 App 內開啟獨立的「假名」開關。
 
 小卡按鈕順序刻意排成：
 
@@ -97,6 +99,8 @@ gemini-2.5-flash-lite
 
 手機端會檢查 `rubySegments` 串起來是否完全等於 `japanese`。如果不一致，會自動退回普通日文顯示，避免假名錯位。
 
+furigana 顯示使用自製 Compose renderer：有讀音的漢字詞會維持為一個 ruby 片段；沒有讀音的長文字片段會在 UI 顯示時拆小，避免 `FlowRow` 因為整段太長而提早換行。
+
 ## 執行
 
 ```bash
@@ -126,7 +130,7 @@ wear/  手錶版
 - 播放日文 TTS
 - 手動按「同步」向手機要求最新資料
 
-手錶版目前刻意不顯示 furigana，維持簡潔顯示與播放。
+手錶版有自己的「假名」開關，預設關閉；開啟後會用較小字級顯示漢字上方假名。這個設定獨立於手機端，會記在手錶本機。
 
 同步方式使用 Wear OS Data Layer：
 
@@ -185,6 +189,7 @@ adb -s 手錶_serial install -r wear/build/outputs/apk/debug/wear-debug.apk
 - Gemini REST API
 - Wear OS Data Layer
 - 手機端自製 Compose ruby/furigana 顯示
+- 手錶端自製輕量 ruby/furigana 顯示，預設關閉
 
 ## 目前刻意不做的事
 
@@ -192,4 +197,4 @@ adb -s 手錶_serial install -r wear/build/outputs/apk/debug/wear-debug.apk
 - 不做預載片語
 - 不做英文、泰文、多語言
 - 不做登入、Firebase、上架流程
-- 手錶版不做 Gemini、不做輸入、不做編輯、不顯示 furigana，只做同步顯示與播放
+- 手錶版不做 Gemini、不做輸入、不做編輯，只做同步顯示與播放；furigana 顯示由手錶端獨立開關控制

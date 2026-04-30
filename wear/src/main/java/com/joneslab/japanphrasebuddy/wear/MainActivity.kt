@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +24,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
@@ -47,10 +50,12 @@ private const val RECENT_PHRASES_KEY = "recent_phrases"
 private const val PHRASE_CARDS_PATH = "/phrase_cards"
 private const val REQUEST_PHRASE_CARDS_PATH = "/request_phrase_cards"
 private const val PHRASE_CARDS_JSON_KEY = "cards_json"
+private const val SHOW_FURIGANA_KEY = "wear_show_furigana"
 
 class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
     private var cards by mutableStateOf(emptyList<WearPhraseCard>())
     private var statusText by mutableStateOf("等待手機同步")
+    private var showFurigana by mutableStateOf(false)
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
 
@@ -58,6 +63,8 @@ class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
         super.onCreate(savedInstanceState)
 
         cards = loadWearPhraseCards(this)
+        showFurigana = getSharedPreferences(PHRASE_PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(SHOW_FURIGANA_KEY, false)
         if (cards.isNotEmpty()) {
             statusText = "已載入 ${cards.size} 張小卡"
         }
@@ -74,6 +81,14 @@ class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
             WearPhraseBuddyApp(
                 cards = cards,
                 statusText = statusText,
+                showFurigana = showFurigana,
+                onShowFuriganaChange = { enabled ->
+                    showFurigana = enabled
+                    getSharedPreferences(PHRASE_PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(SHOW_FURIGANA_KEY, enabled)
+                        .apply()
+                },
                 onRequestSync = {
                     statusText = "正在向手機要求同步..."
                     requestPhoneSync()
@@ -144,13 +159,21 @@ class MainActivity : ComponentActivity(), DataClient.OnDataChangedListener {
 data class WearPhraseCard(
     val id: Long,
     val chinese: String,
-    val japanese: String
+    val japanese: String,
+    val rubySegments: List<WearRubySegment> = emptyList()
+)
+
+data class WearRubySegment(
+    val text: String,
+    val reading: String = ""
 )
 
 @Composable
 private fun WearPhraseBuddyApp(
     cards: List<WearPhraseCard>,
     statusText: String,
+    showFurigana: Boolean,
+    onShowFuriganaChange: (Boolean) -> Unit,
     onRequestSync: () -> Unit,
     onSpeak: (String) -> Unit
 ) {
@@ -187,6 +210,20 @@ private fun WearPhraseBuddyApp(
                         Button(onClick = onRequestSync) {
                             Text("同步")
                         }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "假名",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Switch(
+                                checked = showFurigana,
+                                onCheckedChange = onShowFuriganaChange
+                            )
+                        }
                     }
                 }
 
@@ -200,7 +237,11 @@ private fun WearPhraseBuddyApp(
                     }
                 } else {
                     items(cards, key = { it.id }) { card ->
-                        WearPhraseCardItem(card = card, onSpeak = onSpeak)
+                        WearPhraseCardItem(
+                            card = card,
+                            showFurigana = showFurigana,
+                            onSpeak = onSpeak
+                        )
                     }
                 }
             }
@@ -222,6 +263,7 @@ private val wearDarkColorScheme = darkColorScheme(
 @Composable
 private fun WearPhraseCardItem(
     card: WearPhraseCard,
+    showFurigana: Boolean,
     onSpeak: (String) -> Unit
 ) {
     Card(
@@ -240,11 +282,9 @@ private fun WearPhraseCardItem(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                text = card.japanese.ifBlank { "尚未翻譯" },
-                fontSize = 18.sp,
-                lineHeight = 24.sp,
-                fontWeight = FontWeight.SemiBold
+            WearJapaneseText(
+                card = card,
+                showFurigana = showFurigana
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -258,6 +298,71 @@ private fun WearPhraseCardItem(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WearJapaneseText(
+    card: WearPhraseCard,
+    showFurigana: Boolean
+) {
+    when {
+        card.japanese.isBlank() -> {
+            Text(
+                text = "尚未翻譯",
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        card.rubySegments.isEmpty() || !showFurigana -> {
+            Text(
+                text = card.japanese,
+                fontSize = 18.sp,
+                lineHeight = 24.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        else -> {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start,
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                card.rubySegments
+                    .flatMap { it.toDisplaySegments() }
+                    .forEach { segment ->
+                        WearRubySegmentText(segment = segment)
+                    }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WearRubySegmentText(segment: WearRubySegment) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(0.dp),
+        modifier = Modifier.padding(end = 1.dp)
+    ) {
+        Text(
+            text = segment.reading,
+            fontSize = 8.sp,
+            lineHeight = 9.sp,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1
+        )
+        Text(
+            text = segment.text,
+            fontSize = 18.sp,
+            lineHeight = 22.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -277,6 +382,7 @@ private fun saveWearPhraseCards(context: Context, cards: List<WearPhraseCard>) {
                 .put("createdAt", card.id)
                 .put("chinese", card.chinese)
                 .put("japanese", card.japanese)
+                .put("rubySegments", card.rubySegments.toJsonArray())
         )
     }
     context
@@ -294,7 +400,69 @@ private fun parseWearPhraseCards(raw: String): List<WearPhraseCard> =
             WearPhraseCard(
                 id = item.optLong("createdAt", item.optLong("id", index.toLong())),
                 chinese = item.optString("chinese"),
-                japanese = item.optString("japanese")
+                japanese = item.optString("japanese"),
+                rubySegments = normalizeRubySegments(
+                    japanese = item.optString("japanese"),
+                    segments = parseRubySegments(item.optJSONArray("rubySegments"))
+                )
             )
         }
     }.getOrDefault(emptyList())
+
+private fun parseRubySegments(array: JSONArray?): List<WearRubySegment> {
+    if (array == null) return emptyList()
+    return buildList {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val text = item.optString("text")
+            if (text.isNotBlank()) {
+                add(
+                    WearRubySegment(
+                        text = text,
+                        reading = item.optString("reading").trim()
+                    )
+                )
+            }
+        }
+    }
+}
+
+private fun List<WearRubySegment>.toJsonArray(): JSONArray {
+    val array = JSONArray()
+    forEach { segment ->
+        array.put(
+            org.json.JSONObject()
+                .put("text", segment.text)
+                .put("reading", segment.reading)
+        )
+    }
+    return array
+}
+
+private fun normalizeRubySegments(
+    japanese: String,
+    segments: List<WearRubySegment>
+): List<WearRubySegment> {
+    if (japanese.isBlank()) return emptyList()
+    if (segments.isEmpty()) return listOf(WearRubySegment(text = japanese))
+    val joinedText = segments.joinToString(separator = "") { it.text }
+    return if (joinedText == japanese) {
+        segments
+    } else {
+        listOf(WearRubySegment(text = japanese))
+    }
+}
+
+private fun WearRubySegment.toDisplaySegments(): List<WearRubySegment> {
+    if (text.isBlank()) return emptyList()
+    if (reading.isNotBlank()) return listOf(this)
+
+    return text.codePoints()
+        .toArray()
+        .map { codePoint ->
+            WearRubySegment(
+                text = String(Character.toChars(codePoint)),
+                reading = ""
+            )
+        }
+}

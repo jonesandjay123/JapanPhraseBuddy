@@ -70,6 +70,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.android.gms.wearable.MessageEvent
+import com.google.android.gms.wearable.PutDataMapRequest
+import com.google.android.gms.wearable.Wearable
+import com.google.android.gms.wearable.WearableListenerService
 import com.joneslab.japanphrasebuddy.ui.theme.JapanPhraseBuddyTheme
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -80,6 +84,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val PHRASE_PREFS_NAME = "phrases"
+private const val RECENT_PHRASES_KEY = "recent_phrases"
+private const val PHRASE_CARDS_PATH = "/phrase_cards"
+private const val REQUEST_PHRASE_CARDS_PATH = "/request_phrase_cards"
+private const val PHRASE_CARDS_JSON_KEY = "cards_json"
+private const val PHRASE_CARDS_UPDATED_AT_KEY = "updated_at"
 
 class MainActivity : ComponentActivity() {
     private var tts: TextToSpeech? = null
@@ -124,12 +135,21 @@ data class PhraseRecord(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+class PhonePhraseSyncService : WearableListenerService() {
+    override fun onMessageReceived(messageEvent: MessageEvent) {
+        if (messageEvent.path == REQUEST_PHRASE_CARDS_PATH) {
+            val prefs = getSharedPreferences(PHRASE_PREFS_NAME, Context.MODE_PRIVATE)
+            syncPhraseRecordsToWear(this, loadPhraseRecords(prefs))
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("phrases", Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences(PHRASE_PREFS_NAME, Context.MODE_PRIVATE) }
     var chineseText by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var records by remember { mutableStateOf(loadPhraseRecords(prefs)) }
@@ -205,7 +225,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                         val newRecord = PhraseRecord(input, "")
                         val updatedRecords = listOf(newRecord) + records
                         records = updatedRecords
-                        savePhraseRecords(prefs, updatedRecords)
+                        saveAndSyncPhraseRecords(context, prefs, updatedRecords)
                         chineseText = ""
                         message = "已新增小卡，之後可再翻譯"
                     },
@@ -274,13 +294,13 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                         onDelete = {
                             val updatedRecords = records.filterNot { it.createdAt == record.createdAt }
                             records = updatedRecords
-                            savePhraseRecords(prefs, updatedRecords)
+                            saveAndSyncPhraseRecords(context, prefs, updatedRecords)
                             message = "已刪除小卡"
                         },
                         onMove = { fromIndex, toIndex ->
                             val updatedRecords = records.move(fromIndex, toIndex)
                             records = updatedRecords
-                            savePhraseRecords(prefs, updatedRecords)
+                            saveAndSyncPhraseRecords(context, prefs, updatedRecords)
                         },
                         onTranslate = {
                             scope.launch {
@@ -298,7 +318,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                                             }
                                         }
                                         records = updatedRecords
-                                        savePhraseRecords(prefs, updatedRecords)
+                                        saveAndSyncPhraseRecords(context, prefs, updatedRecords)
                                         message = "已補上日文"
                                     }
                                     .onFailure { error ->
@@ -319,7 +339,7 @@ fun JapanPhraseBuddyApp(onSpeak: (String) -> Unit) {
                 importTranslatedRecords(jsonText, records)
                     .onSuccess { result ->
                         records = result.records
-                        savePhraseRecords(prefs, result.records)
+                        saveAndSyncPhraseRecords(context, prefs, result.records)
                         showImportDialog = false
                         message = "已更新 ${result.updatedCount} 張小卡"
                     }
@@ -742,7 +762,7 @@ private fun copyText(
 }
 
 private fun loadPhraseRecords(prefs: android.content.SharedPreferences): List<PhraseRecord> {
-    val raw = prefs.getString("recent_phrases", "[]").orEmpty()
+    val raw = prefs.getString(RECENT_PHRASES_KEY, "[]").orEmpty()
     return runCatching {
         val array = JSONArray(raw)
         List(array.length()) { index ->
@@ -756,12 +776,34 @@ private fun loadPhraseRecords(prefs: android.content.SharedPreferences): List<Ph
     }.getOrDefault(emptyList())
 }
 
+private fun saveAndSyncPhraseRecords(
+    context: Context,
+    prefs: android.content.SharedPreferences,
+    records: List<PhraseRecord>
+) {
+    savePhraseRecords(prefs, records)
+    syncPhraseRecordsToWear(context, records)
+}
+
 private fun savePhraseRecords(
     prefs: android.content.SharedPreferences,
     records: List<PhraseRecord>
 ) {
+    prefs.edit().putString(RECENT_PHRASES_KEY, records.toJsonArray().toString()).apply()
+}
+
+private fun syncPhraseRecordsToWear(context: Context, records: List<PhraseRecord>) {
+    val request = PutDataMapRequest.create(PHRASE_CARDS_PATH).apply {
+        dataMap.putString(PHRASE_CARDS_JSON_KEY, records.toJsonArray().toString())
+        dataMap.putLong(PHRASE_CARDS_UPDATED_AT_KEY, System.currentTimeMillis())
+    }.asPutDataRequest().setUrgent()
+
+    Wearable.getDataClient(context.applicationContext).putDataItem(request)
+}
+
+private fun List<PhraseRecord>.toJsonArray(): JSONArray {
     val array = JSONArray()
-    records.forEach { record ->
+    forEach { record ->
         array.put(
             JSONObject()
                 .put("chinese", record.chinese)
@@ -769,7 +811,7 @@ private fun savePhraseRecords(
                 .put("createdAt", record.createdAt)
         )
     }
-    prefs.edit().putString("recent_phrases", array.toString()).apply()
+    return array
 }
 
 @Preview(showBackground = true)

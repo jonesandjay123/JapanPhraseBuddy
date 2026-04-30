@@ -14,6 +14,7 @@
 - 小卡可用左側拖曳把手調整順序
 - 小卡會存在本機，下次打開仍保留
 - Gemini API 429 或額度用完時，可匯出 prompt 給外部 LLM 翻譯，再匯入 JSON 補回小卡
+- Wear OS 版本可被動同步手機小卡，顯示同一份清單並播放日文 TTS
 
 ## 使用方式
 
@@ -71,13 +72,77 @@ gemini-2.5-flash-lite
 ## 執行
 
 ```bash
-./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug :wear:assembleDebug
 ```
 
 Debug APK 會產在：
 
 ```text
 app/build/outputs/apk/debug/app-debug.apk
+wear/build/outputs/apk/debug/wear-debug.apk
+```
+
+## Wear OS 同步
+
+此 repo 內含兩個 module：
+
+```text
+app/   手機版
+wear/  手錶版
+```
+
+目前手錶版固定使用 dark mode，是被動端，不打 Gemini、不編輯小卡，只負責：
+
+- 接收手機同步的小卡 JSON
+- 顯示中文與日文
+- 播放日文 TTS
+- 手動按「同步」向手機要求最新資料
+
+同步方式使用 Wear OS Data Layer：
+
+- 手機每次小卡新增、刪除、翻譯、匯入、排序後，會 push 整份小卡清單到 `/phrase_cards`
+- 手錶啟動或按「同步」時，會送 `/request_phrase_cards` 給手機
+- 手機收到 request 後，會再 push 一次最新 `/phrase_cards`
+
+測試時需要：
+
+1. 手機和手錶已完成 Wear OS / Pixel Watch 配對。
+2. 手機和手錶都開啟 Developer options。
+3. 手機開 USB debugging。
+4. 手錶開 ADB debugging；若不是 USB 連線，開 Wireless debugging。
+5. 手機安裝 `app-debug.apk`。
+6. 手錶安裝 `wear-debug.apk`。
+7. 兩邊 app 使用同一套 debug 簽名與 application id。
+8. 手機新增或翻譯小卡後，打開手錶 app 按「同步」。
+
+如果手錶走 Wi-Fi debugging，大致流程是：
+
+1. 在手錶設定中開啟 Wireless debugging。
+2. 記下手錶顯示的 IP、port、pairing code。
+3. 在電腦執行配對：
+
+```bash
+adb pair 手錶_ip:pairing_port
+```
+
+4. 輸入手錶上的 pairing code。
+5. 再連線到手錶：
+
+```bash
+adb connect 手錶_ip:adb_port
+```
+
+用 adb 安裝時，請先確認裝置：
+
+```bash
+adb devices
+```
+
+接著分別安裝到手機與手錶對應的 device serial：
+
+```bash
+adb -s 手機_serial install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s 手錶_serial install -r wear/build/outputs/apk/debug/wear-debug.apk
 ```
 
 ## 技術概況
@@ -88,6 +153,7 @@ app/build/outputs/apk/debug/app-debug.apk
 - Android RecognizerIntent
 - SharedPreferences + JSON 儲存小卡
 - Gemini REST API
+- Wear OS Data Layer
 
 ## 目前刻意不做的事
 
@@ -95,4 +161,4 @@ app/build/outputs/apk/debug/app-debug.apk
 - 不做預載片語
 - 不做英文、泰文、多語言
 - 不做登入、Firebase、上架流程
-- 不做 Wear OS，等手機版確認好用後再加
+- 手錶版不做 Gemini、不做輸入、不做編輯，只做同步顯示與播放

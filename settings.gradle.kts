@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "JapanPhraseBuddy"
 include(":app")
+include(":wear")
